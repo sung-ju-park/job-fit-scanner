@@ -1,0 +1,14 @@
+# 가상환경
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# 수집한 공고 데이터와 결과물 (회사명·공고 원문 포함) - 업로드하지 않음
+data/
+reports/
+*.db
+
+# 개인 프로필과 API 키
+profile.md
+.env
