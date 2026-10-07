@@ -12,7 +12,8 @@ import os
 import time
 
 from db import ROOT, get_conn, load_env
-from llm import BACKENDS, DEFAULT_DELAYS, DEFAULT_MODELS, LLMError, LLMTimeout, QuotaExceeded, parse_json
+from llm import (BACKENDS, DEFAULT_DELAYS, DEFAULT_MAX_CHARS, DEFAULT_MODELS, LLMError, LLMTimeout,
+                 QuotaExceeded, parse_json)
 from textutil import focus_text
 
 SYSTEM_PROMPT = """너는 신입·주니어 개발자 채용 공고를 검토하는 채용 담당자다.
@@ -88,30 +89,43 @@ def main():
     parser.add_argument("--only-sample", action="store_true", help="검증 샘플(labels)에 든 공고만 평가")
     parser.add_argument("--redo", action="store_true",
                         help="이미 평가한 공고도 다시 평가 (profile.md나 프롬프트를 고친 뒤 사용)")
-    parser.add_argument("--max-chars", type=int, default=4000,
-                        help="LLM에 보낼 공고 본문 최대 글자 수. 모델 비교 시에는 같은 값을 쓸 것")
+    parser.add_argument("--max-chars", type=int,
+                        help="LLM에 보낼 공고 본문 최대 글자 수. 기본: gemini 15000, ollama 4000. "
+                             "두 모델을 같은 조건으로 비교할 때는 같은 값을 직접 지정할 것")
+    parser.add_argument("--redo-long", type=int, metavar="N",
+                        help="이미 평가한 공고 중 본문이 N자보다 긴 것만 다시 평가 "
+                             "(예전에 본문이 잘린 채 평가됐을 수 있는 공고를 고칠 때 사용)")
     args = parser.parse_args()
 
     load_env()
     model = args.model or DEFAULT_MODELS[args.backend]
     model_key = f"{args.backend}:{model}"
     delay = args.delay if args.delay is not None else DEFAULT_DELAYS[args.backend]
+    max_chars = args.max_chars or DEFAULT_MAX_CHARS[args.backend]
     call = BACKENDS[args.backend]
     profile = load_profile()
 
     sample_clause = "AND p.url IN (SELECT url FROM labels)" if args.only_sample else ""
+    if args.redo_long:
+        target_clause, params = ("AND LENGTH(p.raw_text) > ? AND p.url IN (SELECT url FROM evaluations WHERE model = ?)",
+                                 (args.redo_long, model_key, args.limit))
+        mode = f" (본문 {args.redo_long:,}자 초과 공고 재평가)"
+    elif args.redo:
+        target_clause, params, mode = "", (args.limit,), " (재평가)"
+    else:
+        target_clause, params, mode = ("AND p.url NOT IN (SELECT url FROM evaluations WHERE model = ?)",
+                                       (model_key, args.limit), "")
     with get_conn() as conn:
         rows = conn.execute(f"""
             SELECT p.url, p.title, p.company, p.raw_text FROM postings p
-            WHERE p.prefilter_pass = 1 {sample_clause}
-              {"" if args.redo else "AND p.url NOT IN (SELECT url FROM evaluations WHERE model = ?)"}
-            LIMIT ?""", ((args.limit,) if args.redo else (model_key, args.limit))).fetchall()
-    print(f"평가 대상 {len(rows)}건, 모델 {model_key}{' (재평가)' if args.redo else ''}")
+            WHERE p.prefilter_pass = 1 {sample_clause} {target_clause}
+            LIMIT ?""", params).fetchall()
+    print(f"평가 대상 {len(rows)}건, 모델 {model_key}, 본문 최대 {max_chars:,}자{mode}")
 
     done = errors = 0
     for i, row in enumerate(rows, 1):
         user_msg = USER_TEMPLATE.format(profile=profile, title=row["title"],
-                                        company=row["company"], body=focus_text(row["raw_text"], args.max_chars))
+                                        company=row["company"], body=focus_text(row["raw_text"], max_chars))
         started = time.time()
         result = None
         for attempt in range(2):  # JSON이 깨지면 한 번 더 시도

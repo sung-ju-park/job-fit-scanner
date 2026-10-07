@@ -89,3 +89,6 @@ def call_gemini(model: str, system: str, user: str, max_retries: int = 3) -> str
 BACKENDS = {"ollama": call_ollama, "gemini": call_gemini}
 DEFAULT_MODELS = {"ollama": "qwen2.5:3b", "gemini": "gemini-3.5-flash-lite"}
 DEFAULT_DELAYS = {"ollama": 0.0, "gemini": 5.0}
+# 공고 본문 최대 글자 수. 작은 로컬 모델은 입력이 길면 헤매서 짧게 자르고,
+# Gemini는 긴 입력도 문제없어서 여러 부문 공고가 잘리지 않도록 넉넉하게 보낸다.
+DEFAULT_MAX_CHARS = {"ollama": 4000, "gemini": 15000}

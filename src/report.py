@@ -9,6 +9,7 @@
 사용 예:
     python src/report.py
     python src/report.py --html
+    python src/report.py --html --anonymize   # README 캡처용 (회사명·공고 제목 가림)
 """
 import argparse
 import html
@@ -67,7 +68,7 @@ def write_markdown(base, others, rows, scores, excluded, title):
     return out
 
 
-def write_html(base, rows, excluded, title, total):
+def write_html(base, rows, excluded, title, total, out_name="latest.html"):
     e = html.escape
 
     def band(score):
@@ -255,9 +256,40 @@ dd {{ margin: 0; }}
 </script>
 </body>
 </html>"""
-    out = REPORT_DIR / "latest.html"
+    out = REPORT_DIR / out_name
     out.write_text(page, encoding="utf-8")
     return out
+
+
+def anonymize(rows, excluded):
+    """공개용(README 캡처 등)으로 회사명·공고 제목·링크를 가린다. 점수와 평가 내용은 그대로 둔다.
+    공고 제목은 LLM이 이유 앞에 붙인 [부문명]으로 바꾼다."""
+    import re
+
+    def label(i):
+        letters = ""
+        i += 1
+        while i:
+            i, r = divmod(i - 1, 26)
+            letters = chr(65 + r) + letters
+        return f"회사 {letters}"
+
+    out = []
+    for i, r in enumerate(rows):
+        d = dict(r)
+        m = re.match(r"\s*\[([^\]]+)\]", d.get("reason") or "")
+        part = m.group(1).strip() if m else ""
+        d["title"] = f"{part} 직무" if part and part != "해당 없음" else "모집 부문 비공개"
+        reason = d.get("reason") or ""
+        if d.get("company"):
+            reason = reason.replace(d["company"], label(i))
+        d["reason"] = reason
+        d["company"] = label(i)
+        d["url"] = "#"
+        out.append(d)
+    ex = [{"prefilter_reason": r["prefilter_reason"], "company": "회사 (가림)",
+           "title": "공고 제목 (가림)", "url": "#"} for r in excluded]
+    return out, ex
 
 
 def main():
@@ -267,6 +299,8 @@ def main():
     parser.add_argument("--top", type=int, default=30, help="상위 몇 건까지 보여줄지 (0이면 전체)")
     parser.add_argument("--since", help="이 시각(UTC, 'YYYY-MM-DD HH:MM:SS') 이후 평가된 공고만")
     parser.add_argument("--html", action="store_true", help="reports/latest.html도 생성")
+    parser.add_argument("--anonymize", action="store_true",
+                        help="회사명·공고 제목·링크를 가린 공개용 HTML(reports/public.html)도 생성")
     args = parser.parse_args()
 
     data = load(args)
@@ -283,6 +317,10 @@ def main():
     print(f"리포트 저장: {write_markdown(base, others, rows, scores, excluded, title)}")
     if args.html:
         print(f"HTML 리포트: {write_html(base, rows, excluded, title, total)}")
+    if args.anonymize:
+        pub_rows, pub_ex = anonymize(rows, excluded)
+        out = write_html(base, pub_rows, pub_ex, title + " (회사명·공고명 가림)", total, out_name="public.html")
+        print(f"공개용 HTML: {out}")
     for r in rows[:5]:
         print(f"  {r['score']:>3}점  {r['company']} | {r['title'][:40]}")
 
